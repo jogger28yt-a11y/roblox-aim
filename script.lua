@@ -20,12 +20,12 @@ local AimPart = "HumanoidRootPart"
 local MaxTargetDistance = 300
 
 local DesiredDistance = 39
-local DistanceTolerance = 2
+local DistanceTolerance = 4
 
 --// Optimisation
 
-local MovementUpdateRate = 0.08
-local TargetUpdateRate = 0.25
+local MovementUpdateRate = 0.02
+local TargetUpdateRate = 0.35
 
 local lastMovementUpdate = 0
 local lastTargetUpdate = 0
