@@ -1,4 +1,4 @@
--- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide
+-- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide + auto equip
 -- T = activer / désactiver
 -- Quand OFF : contrôle rendu au joueur
 
@@ -50,6 +50,12 @@ local WallCheckDistance = 4
 local WallJumpCooldown = 0.35
 local lastWallJump = 0
 
+--// Auto sélection item hotbar / backpack
+
+local AutoEquipSlot1 = true
+local AutoEquipCooldown = 0.3
+local lastAutoEquip = 0
+
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -79,6 +85,46 @@ local function stopMovement()
 	end
 
 	Camera.CameraType = Enum.CameraType.Custom
+end
+
+local function autoEquipFirstTool()
+	if not AutoEquipSlot1 then
+		return
+	end
+
+	local now = os.clock()
+
+	if now - lastAutoEquip < AutoEquipCooldown then
+		return
+	end
+
+	lastAutoEquip = now
+
+	local character = LocalPlayer.Character
+	local backpack = LocalPlayer:FindFirstChild("Backpack")
+
+	if not character or not backpack then
+		return
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+	if not humanoid then
+		return
+	end
+
+	local equippedTool = character:FindFirstChildOfClass("Tool")
+
+	if equippedTool then
+		return
+	end
+
+	for _, item in ipairs(backpack:GetChildren()) do
+		if item:IsA("Tool") then
+			humanoid:EquipTool(item)
+			break
+		end
+	end
 end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -239,6 +285,8 @@ RunService.RenderStepped:Connect(function()
 	if not myCharacter or not myHumanoid or not myRoot then
 		return
 	end
+
+	autoEquipFirstTool()
 
 	-- Recherche de cible allégée
 	if now - lastTargetUpdate >= TargetUpdateRate then
