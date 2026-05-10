@@ -1,13 +1,18 @@
--- Auto lock caméra + déplacement safe allégé
--- Garde 39 studs avec la cible, évite le vide, réduit les freeze
+-- Version optimisée : lock caméra + garde distance + évite le vide
+-- T = active / désactive le script
+-- Quand OFF : contrôle rendu au joueur
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local PathfindingService = game:GetService("PathfindingService")
 local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
+
+--// Activation
+
+local ScriptEnabled = true
 
 --// Réglages cible
 
@@ -17,53 +22,40 @@ local MaxTargetDistance = 300
 local DesiredDistance = 39
 local DistanceTolerance = 2
 
---// Pathfinding allégé
+--// Optimisation
 
-local RecalculatePathDelay = 0.7
-local WaypointReachDistance = 5
-local JumpHeightDifference = 1.5
+local MovementUpdateRate = 0.08
+local TargetUpdateRate = 0.25
 
---// Anti-vide allégé
+local lastMovementUpdate = 0
+local lastTargetUpdate = 0
+local currentTargetPlayer = nil
 
-local GroundCheckDepth = 50
-local GroundCheckHeight = 8
-local MaxSafeDrop = 18
-local SegmentCheckStep = 7
-local FootCheckRadius = 1.1
+--// Mouvement
 
---// Moins de positions testées = moins de freeze
+local MovePower = 1
 
-local AroundTargetSamples = 12
+--// Anti-vide léger
 
---// Anti-blocage
+local GroundCheckDistance = 9
+local GroundCheckDepth = 45
+local GroundCheckHeight = 6
+local SideCheckAngle = 45
+local StrongSideCheckAngle = 90
 
-local StuckCheckDelay = 1
-local StuckDistance = 1.5
-local StuckLimit = 2
+local EdgeSafetyRadius = 1.3
 
 --// Mur / obstacle
 
 local WallCheckDistance = 4
 local WallJumpCooldown = 0.35
-
-local LockEnabled = true
-
-local currentPath = nil
-local waypoints = {}
-local currentWaypointIndex = 1
-local lastPathCalculation = 0
-local currentDestination = nil
-
-local lastPosition = nil
-local lastStuckCheck = 0
-local stuckCount = 0
 local lastWallJump = 0
 
-local raycastParams = RaycastParams.new()
-raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+local rayParams = RaycastParams.new()
+rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
-local wallRayParams = RaycastParams.new()
-wallRayParams.FilterType = Enum.RaycastFilterType.Exclude
+local wallParams = RaycastParams.new()
+wallParams.FilterType = Enum.RaycastFilterType.Exclude
 
 local function getCharacter(player)
 	local character = player.Character
@@ -72,27 +64,36 @@ local function getCharacter(player)
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	local root = character:FindFirstChild("HumanoidRootPart")
 
-	if not humanoid or not root then
-		return nil
-	end
-
-	if humanoid.Health <= 0 then
+	if not humanoid or not root or humanoid.Health <= 0 then
 		return nil
 	end
 
 	return character, humanoid, root
 end
 
-local function hardStop(humanoid)
-	humanoid:Move(Vector3.zero, false)
+local function stopScriptMovement()
+	local character = LocalPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if humanoid then
+		humanoid:Move(Vector3.zero, false)
+	end
+
+	Camera.CameraType = Enum.CameraType.Custom
 end
 
-local function clearPath()
-	currentPath = nil
-	waypoints = {}
-	currentWaypointIndex = 1
-	currentDestination = nil
-end
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+
+	if input.KeyCode == Enum.KeyCode.T then
+		ScriptEnabled = not ScriptEnabled
+		stopScriptMovement()
+
+		if not ScriptEnabled then
+			currentTargetPlayer = nil
+		end
+	end
+end)
 
 local function getClosestPlayer()
 	local _, _, myRoot = getCharacter(LocalPlayer)
@@ -103,10 +104,10 @@ local function getClosestPlayer()
 
 	for _, otherPlayer in ipairs(Players:GetPlayers()) do
 		if otherPlayer ~= LocalPlayer then
-			local character, humanoid, root = getCharacter(otherPlayer)
+			local _, _, otherRoot = getCharacter(otherPlayer)
 
-			if character and humanoid and root then
-				local distance = (root.Position - myRoot.Position).Magnitude
+			if otherRoot then
+				local distance = (otherRoot.Position - myRoot.Position).Magnitude
 
 				if distance < closestDistance then
 					closestDistance = distance
@@ -119,48 +120,28 @@ local function getClosestPlayer()
 	return closestPlayer
 end
 
-local function raycastGround(position, character)
-	raycastParams.FilterDescendantsInstances = { character }
+local function hasGround(position, character)
+	rayParams.FilterDescendantsInstances = { character }
 
-	local rayOrigin = position + Vector3.new(0, GroundCheckHeight, 0)
-	local rayDirection = Vector3.new(0, -GroundCheckDepth, 0)
+	local origin = position + Vector3.new(0, GroundCheckHeight, 0)
+	local direction = Vector3.new(0, -GroundCheckDepth, 0)
 
-	return Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+	local result = Workspace:Raycast(origin, direction, rayParams)
+
+	return result ~= nil
 end
 
-local function hasSafeGroundAt(position, character, referenceY)
-	local result = raycastGround(position, character)
-
-	if not result then
-		return false, nil
-	end
-
-	local groundPosition = result.Position
-
-	if referenceY then
-		local drop = referenceY - groundPosition.Y
-
-		if drop > MaxSafeDrop then
-			return false, nil
-		end
-	end
-
-	return true, groundPosition
-end
-
-local function isFootprintSafe(position, character, referenceY)
+local function isPositionSafe(position, character)
 	local checks = {
 		Vector3.new(0, 0, 0),
-		Vector3.new(FootCheckRadius, 0, 0),
-		Vector3.new(-FootCheckRadius, 0, 0),
-		Vector3.new(0, 0, FootCheckRadius),
-		Vector3.new(0, 0, -FootCheckRadius),
+		Vector3.new(EdgeSafetyRadius, 0, 0),
+		Vector3.new(-EdgeSafetyRadius, 0, 0),
+		Vector3.new(0, 0, EdgeSafetyRadius),
+		Vector3.new(0, 0, -EdgeSafetyRadius),
 	}
 
 	for _, offset in ipairs(checks) do
-		local safe = hasSafeGroundAt(position + offset, character, referenceY)
-
-		if not safe then
+		if not hasGround(position + offset, character) then
 			return false
 		end
 	end
@@ -168,27 +149,49 @@ local function isFootprintSafe(position, character, referenceY)
 	return true
 end
 
-local function isSegmentSafe(startPosition, endPosition, character)
-	local direction = endPosition - startPosition
-	local distance = direction.Magnitude
+local function rotateDirection(direction, degrees)
+	local radians = math.rad(degrees)
+	local cos = math.cos(radians)
+	local sin = math.sin(radians)
 
-	if distance <= 0 then
-		return true
+	local x = direction.X * cos - direction.Z * sin
+	local z = direction.X * sin + direction.Z * cos
+
+	return Vector3.new(x, 0, z)
+end
+
+local function chooseSafeDirection(root, character, wantedDirection)
+	if wantedDirection.Magnitude <= 0 then
+		return Vector3.zero
 	end
 
-	local steps = math.ceil(distance / SegmentCheckStep)
-	local referenceY = startPosition.Y
+	local flatWanted = Vector3.new(wantedDirection.X, 0, wantedDirection.Z)
 
-	for i = 0, steps do
-		local alpha = i / steps
-		local checkPosition = startPosition:Lerp(endPosition, alpha)
+	if flatWanted.Magnitude <= 0 then
+		return Vector3.zero
+	end
 
-		if not isFootprintSafe(checkPosition, character, referenceY) then
-			return false
+	flatWanted = flatWanted.Unit
+
+	local directionsToTry = {
+		flatWanted,
+		rotateDirection(flatWanted, SideCheckAngle),
+		rotateDirection(flatWanted, -SideCheckAngle),
+		rotateDirection(flatWanted, StrongSideCheckAngle),
+		rotateDirection(flatWanted, -StrongSideCheckAngle),
+		rotateDirection(flatWanted, 135),
+		rotateDirection(flatWanted, -135),
+	}
+
+	for _, direction in ipairs(directionsToTry) do
+		local checkPosition = root.Position + direction.Unit * GroundCheckDistance
+
+		if isPositionSafe(checkPosition, character) then
+			return direction.Unit
 		end
 	end
 
-	return true
+	return Vector3.zero
 end
 
 local function checkWallAhead(root, character, direction)
@@ -196,7 +199,7 @@ local function checkWallAhead(root, character, direction)
 		return false
 	end
 
-	wallRayParams.FilterDescendantsInstances = { character }
+	wallParams.FilterDescendantsInstances = { character }
 
 	local flatDirection = Vector3.new(direction.X, 0, direction.Z)
 
@@ -204,10 +207,10 @@ local function checkWallAhead(root, character, direction)
 		return false
 	end
 
-	local rayOrigin = root.Position + Vector3.new(0, 2, 0)
+	local origin = root.Position + Vector3.new(0, 2, 0)
 	local rayDirection = flatDirection.Unit * WallCheckDistance
 
-	local result = Workspace:Raycast(rayOrigin, rayDirection, wallRayParams)
+	local result = Workspace:Raycast(origin, rayDirection, wallParams)
 
 	if result and result.Instance and result.Instance.CanCollide then
 		return true
@@ -216,7 +219,7 @@ local function checkWallAhead(root, character, direction)
 	return false
 end
 
-local function tryClimbObstacle(humanoid, root, character, direction)
+local function tryJumpObstacle(humanoid, root, character, direction)
 	local now = os.clock()
 
 	if now - lastWallJump < WallJumpCooldown then
@@ -226,300 +229,85 @@ local function tryClimbObstacle(humanoid, root, character, direction)
 	if checkWallAhead(root, character, direction) then
 		lastWallJump = now
 		humanoid.Jump = true
-		humanoid:Move(direction.Unit, false)
 	end
-end
-
-local function computePathTo(destination)
-	local myCharacter, _, myRoot = getCharacter(LocalPlayer)
-
-	if not myCharacter or not myRoot then
-		return nil, nil
-	end
-
-	local hasGround, groundPosition = hasSafeGroundAt(destination, myCharacter, myRoot.Position.Y)
-
-	if not hasGround then
-		return nil, nil
-	end
-
-	local finalDestination = Vector3.new(
-		destination.X,
-		groundPosition.Y + 2,
-		destination.Z
-	)
-
-	if not isFootprintSafe(finalDestination, myCharacter, myRoot.Position.Y) then
-		return nil, nil
-	end
-
-	local path = PathfindingService:CreatePath({
-		AgentRadius = 1.5,
-		AgentHeight = 5,
-		AgentCanJump = true,
-		AgentCanClimb = true,
-		AgentJumpHeight = 12,
-		AgentMaxSlope = 50,
-		WaypointSpacing = 4
-	})
-
-	local success = pcall(function()
-		path:ComputeAsync(myRoot.Position, finalDestination)
-	end)
-
-	if success and path.Status == Enum.PathStatus.Success then
-		return path, finalDestination
-	end
-
-	return nil, nil
-end
-
-local function pathIsSafe(path, character, root)
-	local pathWaypoints = path:GetWaypoints()
-
-	if #pathWaypoints == 0 then
-		return false
-	end
-
-	local previousPosition = root.Position
-
-	for _, waypoint in ipairs(pathWaypoints) do
-		local waypointPosition = waypoint.Position
-
-		if not isFootprintSafe(waypointPosition, character, root.Position.Y) then
-			return false
-		end
-
-		if not isSegmentSafe(previousPosition, waypointPosition, character) then
-			return false
-		end
-
-		previousPosition = waypointPosition
-	end
-
-	return true
-end
-
-local function findBestSafePositionAroundTarget(myRoot, targetRoot)
-	local myCharacter = LocalPlayer.Character
-
-	if not myCharacter then
-		return nil, nil
-	end
-
-	local targetPosition = targetRoot.Position
-
-	local bestPath = nil
-	local bestDestination = nil
-	local bestScore = math.huge
-
-	for i = 1, AroundTargetSamples do
-		local angle = math.pi * 2 * (i / AroundTargetSamples)
-
-		local offset = Vector3.new(
-			math.cos(angle) * DesiredDistance,
-			0,
-			math.sin(angle) * DesiredDistance
-		)
-
-		local candidate = targetPosition + offset
-		local path, finalDestination = computePathTo(candidate)
-
-		if path and finalDestination and pathIsSafe(path, myCharacter, myRoot) then
-			local distanceFromMe = (finalDestination - myRoot.Position).Magnitude
-			local distanceFromTarget = (finalDestination - targetRoot.Position).Magnitude
-			local distanceError = math.abs(distanceFromTarget - DesiredDistance)
-
-			local score = distanceFromMe + distanceError * 3
-
-			if score < bestScore then
-				bestScore = score
-				bestPath = path
-				bestDestination = finalDestination
-			end
-		end
-	end
-
-	return bestPath, bestDestination
-end
-
-local function forceJumpIfNeeded(humanoid, root, waypoint, character)
-	if not waypoint then return end
-
-	local heightDifference = waypoint.Position.Y - root.Position.Y
-
-	if not isFootprintSafe(waypoint.Position, character, root.Position.Y) then
-		return
-	end
-
-	if waypoint.Action == Enum.PathWaypointAction.Jump then
-		humanoid.Jump = true
-	end
-
-	if heightDifference >= JumpHeightDifference then
-		humanoid.Jump = true
-	end
-end
-
-local function checkIfStuck(root)
-	local now = os.clock()
-
-	if not lastPosition then
-		lastPosition = root.Position
-		lastStuckCheck = now
-		return false
-	end
-
-	if now - lastStuckCheck < StuckCheckDelay then
-		return false
-	end
-
-	local movedDistance = (root.Position - lastPosition).Magnitude
-
-	lastPosition = root.Position
-	lastStuckCheck = now
-
-	if movedDistance < StuckDistance then
-		stuckCount += 1
-	else
-		stuckCount = 0
-	end
-
-	if stuckCount >= StuckLimit then
-		stuckCount = 0
-		return true
-	end
-
-	return false
-end
-
-local function followPath(humanoid, root, character)
-	if not waypoints or #waypoints == 0 then
-		hardStop(humanoid)
-		return
-	end
-
-	local waypoint = waypoints[currentWaypointIndex]
-
-	if not waypoint then
-		hardStop(humanoid)
-		return
-	end
-
-	local distanceToWaypoint = (waypoint.Position - root.Position).Magnitude
-
-	if distanceToWaypoint <= WaypointReachDistance then
-		currentWaypointIndex += 1
-		waypoint = waypoints[currentWaypointIndex]
-
-		if not waypoint then
-			hardStop(humanoid)
-			return
-		end
-	end
-
-	local nextPosition = waypoint.Position
-	local direction = nextPosition - root.Position
-	local flatDirection = Vector3.new(direction.X, 0, direction.Z)
-
-	if not isFootprintSafe(root.Position, character, root.Position.Y) then
-		hardStop(humanoid)
-		clearPath()
-		return
-	end
-
-	if not isFootprintSafe(nextPosition, character, root.Position.Y) then
-		hardStop(humanoid)
-		clearPath()
-		return
-	end
-
-	if not isSegmentSafe(root.Position, nextPosition, character) then
-		hardStop(humanoid)
-		clearPath()
-		return
-	end
-
-	forceJumpIfNeeded(humanoid, root, waypoint, character)
-
-	if flatDirection.Magnitude > 0 then
-		tryClimbObstacle(humanoid, root, character, flatDirection)
-	end
-
-	humanoid:MoveTo(nextPosition)
 end
 
 RunService.RenderStepped:Connect(function()
-	if not LockEnabled then return end
+	if not ScriptEnabled then
+		return
+	end
+
+	local now = os.clock()
 
 	local myCharacter, myHumanoid, myRoot = getCharacter(LocalPlayer)
+	if not myCharacter or not myHumanoid or not myRoot then return end
 
-	if not myCharacter or not myHumanoid or not myRoot then
-		return
+	-- Recherche de cible moins souvent pour éviter le lag
+	if now - lastTargetUpdate >= TargetUpdateRate then
+		lastTargetUpdate = now
+		currentTargetPlayer = getClosestPlayer()
 	end
 
-	if checkIfStuck(myRoot) then
-		clearPath()
-		lastPathCalculation = 0
-	end
-
-	if not isFootprintSafe(myRoot.Position, myCharacter, myRoot.Position.Y) then
-		hardStop(myHumanoid)
-		clearPath()
-		return
-	end
-
-	local targetPlayer = getClosestPlayer()
+	local targetPlayer = currentTargetPlayer
 
 	if not targetPlayer then
-		clearPath()
-		hardStop(myHumanoid)
+		myHumanoid:Move(Vector3.zero, false)
 		return
 	end
 
-	local targetCharacter, targetHumanoid, targetRoot = getCharacter(targetPlayer)
+	local targetCharacter, _, targetRoot = getCharacter(targetPlayer)
 
-	if not targetCharacter or not targetHumanoid or not targetRoot then
-		clearPath()
-		hardStop(myHumanoid)
+	if not targetCharacter or not targetRoot then
+		currentTargetPlayer = nil
+		myHumanoid:Move(Vector3.zero, false)
 		return
 	end
 
 	local targetPart = targetCharacter:FindFirstChild(AimPart)
 
+	-- Caméra toujours fluide
 	if targetPart then
 		Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPart.Position)
 	end
 
-	local distanceToTarget = (targetRoot.Position - myRoot.Position).Magnitude
-
-	if distanceToTarget >= DesiredDistance - DistanceTolerance and distanceToTarget <= DesiredDistance + DistanceTolerance then
-		hardStop(myHumanoid)
+	-- Déplacement moins souvent pour éviter les freeze
+	if now - lastMovementUpdate < MovementUpdateRate then
 		return
 	end
 
-	local now = os.clock()
+	lastMovementUpdate = now
 
-	if now - lastPathCalculation >= RecalculatePathDelay then
-		lastPathCalculation = now
+	local myPos = myRoot.Position
+	local targetPos = targetRoot.Position
 
-		local path, destination = findBestSafePositionAroundTarget(myRoot, targetRoot)
+	local flatTargetPos = Vector3.new(targetPos.X, myPos.Y, targetPos.Z)
+	local directionToTarget = flatTargetPos - myPos
+	local distance = directionToTarget.Magnitude
 
-		if path and destination then
-			currentPath = path
-			currentDestination = destination
-			waypoints = path:GetWaypoints()
-			currentWaypointIndex = 1
-		else
-			clearPath()
-			hardStop(myHumanoid)
-			return
-		end
+	if distance <= 0 then
+		myHumanoid:Move(Vector3.zero, false)
+		return
 	end
 
-	if currentPath and #waypoints > 0 then
-		followPath(myHumanoid, myRoot, myCharacter)
+	local wantedDirection = Vector3.zero
+
+	if distance > DesiredDistance + DistanceTolerance then
+		wantedDirection = directionToTarget.Unit
+
+	elseif distance < DesiredDistance - DistanceTolerance then
+		wantedDirection = -directionToTarget.Unit
+
 	else
-		hardStop(myHumanoid)
+		myHumanoid:Move(Vector3.zero, false)
+		return
+	end
+
+	local safeDirection = chooseSafeDirection(myRoot, myCharacter, wantedDirection)
+
+	if safeDirection.Magnitude > 0 then
+		tryJumpObstacle(myHumanoid, myRoot, myCharacter, safeDirection)
+		myHumanoid:Move(safeDirection * MovePower, false)
+	else
+		myHumanoid:Move(Vector3.zero, false)
 	end
 end)
