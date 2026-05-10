@@ -1,4 +1,4 @@
--- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide + Super Speed Coil violet uniquement
+-- Mode Destruction Makima : Control Monster + lock caméra + déplacement fluide + anti-vide
 -- T = activer / désactiver
 -- Quand OFF : contrôle rendu au joueur
 
@@ -6,7 +6,6 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
@@ -14,6 +13,14 @@ local Camera = Workspace.CurrentCamera
 --// Activation
 
 local ScriptEnabled = true
+
+--// Auto sélection personnage
+
+local AutoSelectCharacterEnabled = true
+local WantedCharacterName = "Control Monster"
+local AutoSelectCooldown = 1
+local lastAutoSelect = 0
+local characterAlreadySelected = false
 
 --// Réglages cible
 
@@ -51,18 +58,6 @@ local WallCheckDistance = 4
 local WallJumpCooldown = 0.35
 local lastWallJump = 0
 
---// Auto sélection Super Speed Coil violet uniquement
-
-local AutoEquipSuperSpeedCoilEnabled = true
-local AutoEquipCooldown = 0.3
-local lastAutoEquip = 0
-
-local WantedToolNames = {
-	"Super Speed Coil",
-	"SuperSpeedCoil",
-	"super speed coil",
-}
-
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -94,119 +89,7 @@ local function stopMovement()
 	Camera.CameraType = Enum.CameraType.Custom
 end
 
-local function isWantedTool(tool)
-	if not tool or not tool:IsA("Tool") then
-		return false
-	end
-
-	local toolName = string.lower(tool.Name)
-
-	-- Refuse le Speed Coil orange
-	if toolName == "speed coil" then
-		return false
-	end
-
-	for _, wantedName in ipairs(WantedToolNames) do
-		if toolName == string.lower(wantedName) then
-			return true
-		end
-	end
-
-	-- Accepte seulement si le nom contient bien super + speed + coil
-	if string.find(toolName, "super") and string.find(toolName, "speed") and string.find(toolName, "coil") then
-		return true
-	end
-
-	return false
-end
-
-local function findWantedToolIn(container)
-	if not container then
-		return nil
-	end
-
-	for _, item in ipairs(container:GetDescendants()) do
-		if isWantedTool(item) then
-			return item
-		end
-	end
-
-	return nil
-end
-
-local function autoEquipSuperSpeedCoil()
-	if not AutoEquipSuperSpeedCoilEnabled then
-		return
-	end
-
-	local now = os.clock()
-
-	if now - lastAutoEquip < AutoEquipCooldown then
-		return
-	end
-
-	lastAutoEquip = now
-
-	local character = LocalPlayer.Character
-	local backpack = LocalPlayer:FindFirstChild("Backpack")
-
-	if not character or not backpack then
-		return
-	end
-
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-
-	if not humanoid then
-		return
-	end
-
-	local equippedTool = character:FindFirstChildOfClass("Tool")
-
-	-- Si le Super Speed Coil violet est déjà équipé, on ne touche à rien
-	if equippedTool and isWantedTool(equippedTool) then
-		return
-	end
-
-	-- Si un mauvais tool est équipé, on le déséquipe pour pouvoir prendre le violet
-	if equippedTool and not isWantedTool(equippedTool) then
-		humanoid:UnequipTools()
-	end
-
-	-- Cherche d'abord dans le Backpack / hotbar
-	local toolInBackpack = findWantedToolIn(backpack)
-
-	if toolInBackpack then
-		humanoid:EquipTool(toolInBackpack)
-		return
-	end
-
-	-- Cherche dans le Character
-	local toolInCharacter = findWantedToolIn(character)
-
-	if toolInCharacter then
-		return
-	end
-
-	-- Cherche dans ReplicatedStorage
-	local toolInReplicatedStorage = findWantedToolIn(ReplicatedStorage)
-
-	if toolInReplicatedStorage then
-		local clone = toolInReplicatedStorage:Clone()
-		clone.Parent = backpack
-		humanoid:EquipTool(clone)
-		return
-	end
-
-	-- Cherche dans Workspace
-	local toolInWorkspace = findWantedToolIn(Workspace)
-
-	if toolInWorkspace then
-		local clone = toolInWorkspace:Clone()
-		clone.Parent = backpack
-		humanoid:EquipTool(clone)
-		return
-	end
-end
+--// T pour ON / OFF
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
@@ -220,6 +103,72 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		end
 	end
 end)
+
+--// Auto sélection Control Monster
+
+local function textMatchesControlMonster(text)
+	if not text then
+		return false
+	end
+
+	text = string.lower(tostring(text))
+
+	return string.find(text, "control") and string.find(text, "monster")
+end
+
+local function getGuiButtonText(button)
+	if button:IsA("TextButton") then
+		return button.Text
+	end
+
+	for _, descendant in ipairs(button:GetDescendants()) do
+		if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
+			if textMatchesControlMonster(descendant.Text) then
+				return descendant.Text
+			end
+		end
+	end
+
+	return nil
+end
+
+local function autoSelectControlMonster()
+	if not AutoSelectCharacterEnabled then
+		return
+	end
+
+	if characterAlreadySelected then
+		return
+	end
+
+	local now = os.clock()
+
+	if now - lastAutoSelect < AutoSelectCooldown then
+		return
+	end
+
+	lastAutoSelect = now
+
+	local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+	if not playerGui then
+		return
+	end
+
+	for _, guiObject in ipairs(playerGui:GetDescendants()) do
+		if guiObject:IsA("TextButton") or guiObject:IsA("ImageButton") then
+			local nameMatch = textMatchesControlMonster(guiObject.Name)
+			local textMatch = textMatchesControlMonster(getGuiButtonText(guiObject))
+
+			if nameMatch or textMatch then
+				guiObject:Activate()
+				characterAlreadySelected = true
+				return
+			end
+		end
+	end
+end
+
+--// Cible la plus proche
 
 local function getClosestPlayer()
 	local _, _, myRoot = getCharacter(LocalPlayer)
@@ -245,6 +194,8 @@ local function getClosestPlayer()
 
 	return closestPlayer
 end
+
+--// Anti-vide
 
 local function hasGround(position, character)
 	rayParams.FilterDescendantsInstances = { character }
@@ -321,6 +272,8 @@ local function chooseSafeDirection(root, character, wantedDirection)
 	return Vector3.zero
 end
 
+--// Saut obstacle / mur
+
 local function checkWallAhead(root, character, direction)
 	if direction.Magnitude <= 0 then
 		return false
@@ -355,6 +308,8 @@ local function tryJumpObstacle(humanoid, root, character, direction)
 	end
 end
 
+--// Boucle principale
+
 RunService.RenderStepped:Connect(function()
 	if not ScriptEnabled then
 		return
@@ -367,7 +322,7 @@ RunService.RenderStepped:Connect(function()
 		return
 	end
 
-	autoEquipSuperSpeedCoil()
+	autoSelectControlMonster()
 
 	if now - lastTargetUpdate >= TargetUpdateRate then
 		lastTargetUpdate = now
