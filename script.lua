@@ -1,4 +1,4 @@
--- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide + Super Speed Coil
+-- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide + Super Speed Coil violet uniquement
 -- T = activer / désactiver
 -- Quand OFF : contrôle rendu au joueur
 
@@ -51,7 +51,7 @@ local WallCheckDistance = 4
 local WallJumpCooldown = 0.35
 local lastWallJump = 0
 
---// Auto sélection Super Speed Coil
+--// Auto sélection Super Speed Coil violet uniquement
 
 local AutoEquipSuperSpeedCoilEnabled = true
 local AutoEquipCooldown = 0.3
@@ -59,10 +59,8 @@ local lastAutoEquip = 0
 
 local WantedToolNames = {
 	"Super Speed Coil",
-	"Speed Coil",
 	"SuperSpeedCoil",
 	"super speed coil",
-	"speed coil",
 }
 
 local rayParams = RaycastParams.new()
@@ -103,13 +101,19 @@ local function isWantedTool(tool)
 
 	local toolName = string.lower(tool.Name)
 
+	-- Refuse le Speed Coil orange
+	if toolName == "speed coil" then
+		return false
+	end
+
 	for _, wantedName in ipairs(WantedToolNames) do
 		if toolName == string.lower(wantedName) then
 			return true
 		end
 	end
 
-	if string.find(toolName, "speed") and string.find(toolName, "coil") then
+	-- Accepte seulement si le nom contient bien super + speed + coil
+	if string.find(toolName, "super") and string.find(toolName, "speed") and string.find(toolName, "coil") then
 		return true
 	end
 
@@ -158,10 +162,17 @@ local function autoEquipSuperSpeedCoil()
 
 	local equippedTool = character:FindFirstChildOfClass("Tool")
 
+	-- Si le Super Speed Coil violet est déjà équipé, on ne touche à rien
 	if equippedTool and isWantedTool(equippedTool) then
 		return
 	end
 
+	-- Si un mauvais tool est équipé, on le déséquipe pour pouvoir prendre le violet
+	if equippedTool and not isWantedTool(equippedTool) then
+		humanoid:UnequipTools()
+	end
+
+	-- Cherche d'abord dans le Backpack / hotbar
 	local toolInBackpack = findWantedToolIn(backpack)
 
 	if toolInBackpack then
@@ -169,12 +180,14 @@ local function autoEquipSuperSpeedCoil()
 		return
 	end
 
+	-- Cherche dans le Character
 	local toolInCharacter = findWantedToolIn(character)
 
 	if toolInCharacter then
 		return
 	end
 
+	-- Cherche dans ReplicatedStorage
 	local toolInReplicatedStorage = findWantedToolIn(ReplicatedStorage)
 
 	if toolInReplicatedStorage then
@@ -184,6 +197,7 @@ local function autoEquipSuperSpeedCoil()
 		return
 	end
 
+	-- Cherche dans Workspace
 	local toolInWorkspace = findWantedToolIn(Workspace)
 
 	if toolInWorkspace then
