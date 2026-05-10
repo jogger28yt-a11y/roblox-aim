@@ -1,4 +1,4 @@
--- Mode Destruction Makima : Control Monster + lock caméra + déplacement fluide + anti-vide
+-- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide + auto item hotbar
 -- T = activer / désactiver
 -- Quand OFF : contrôle rendu au joueur
 
@@ -14,13 +14,11 @@ local Camera = Workspace.CurrentCamera
 
 local ScriptEnabled = true
 
---// Auto sélection personnage
+--// Auto prise en main item hotbar / backpack
 
-local AutoSelectCharacterEnabled = true
-local WantedCharacterName = "Control Monster"
-local AutoSelectCooldown = 1
-local lastAutoSelect = 0
-local characterAlreadySelected = false
+local AutoEquipFirstItem = true
+local AutoEquipCooldown = 0.3
+local lastAutoEquip = 0
 
 --// Réglages cible
 
@@ -89,7 +87,46 @@ local function stopMovement()
 	Camera.CameraType = Enum.CameraType.Custom
 end
 
---// T pour ON / OFF
+local function autoEquipFirstTool()
+	if not AutoEquipFirstItem then
+		return
+	end
+
+	local now = os.clock()
+
+	if now - lastAutoEquip < AutoEquipCooldown then
+		return
+	end
+
+	lastAutoEquip = now
+
+	local character = LocalPlayer.Character
+	local backpack = LocalPlayer:FindFirstChild("Backpack")
+
+	if not character or not backpack then
+		return
+	end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+	if not humanoid then
+		return
+	end
+
+	-- Si un item est déjà équipé, on ne touche pas
+	local equippedTool = character:FindFirstChildOfClass("Tool")
+	if equippedTool then
+		return
+	end
+
+	-- Prend le premier Tool trouvé dans la hotbar/backpack
+	for _, item in ipairs(backpack:GetChildren()) do
+		if item:IsA("Tool") then
+			humanoid:EquipTool(item)
+			return
+		end
+	end
+end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
@@ -103,72 +140,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		end
 	end
 end)
-
---// Auto sélection Control Monster
-
-local function textMatchesControlMonster(text)
-	if not text then
-		return false
-	end
-
-	text = string.lower(tostring(text))
-
-	return string.find(text, "control") and string.find(text, "monster")
-end
-
-local function getGuiButtonText(button)
-	if button:IsA("TextButton") then
-		return button.Text
-	end
-
-	for _, descendant in ipairs(button:GetDescendants()) do
-		if descendant:IsA("TextLabel") or descendant:IsA("TextButton") then
-			if textMatchesControlMonster(descendant.Text) then
-				return descendant.Text
-			end
-		end
-	end
-
-	return nil
-end
-
-local function autoSelectControlMonster()
-	if not AutoSelectCharacterEnabled then
-		return
-	end
-
-	if characterAlreadySelected then
-		return
-	end
-
-	local now = os.clock()
-
-	if now - lastAutoSelect < AutoSelectCooldown then
-		return
-	end
-
-	lastAutoSelect = now
-
-	local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-	if not playerGui then
-		return
-	end
-
-	for _, guiObject in ipairs(playerGui:GetDescendants()) do
-		if guiObject:IsA("TextButton") or guiObject:IsA("ImageButton") then
-			local nameMatch = textMatchesControlMonster(guiObject.Name)
-			local textMatch = textMatchesControlMonster(getGuiButtonText(guiObject))
-
-			if nameMatch or textMatch then
-				guiObject:Activate()
-				characterAlreadySelected = true
-				return
-			end
-		end
-	end
-end
-
---// Cible la plus proche
 
 local function getClosestPlayer()
 	local _, _, myRoot = getCharacter(LocalPlayer)
@@ -194,8 +165,6 @@ local function getClosestPlayer()
 
 	return closestPlayer
 end
-
---// Anti-vide
 
 local function hasGround(position, character)
 	rayParams.FilterDescendantsInstances = { character }
@@ -272,8 +241,6 @@ local function chooseSafeDirection(root, character, wantedDirection)
 	return Vector3.zero
 end
 
---// Saut obstacle / mur
-
 local function checkWallAhead(root, character, direction)
 	if direction.Magnitude <= 0 then
 		return false
@@ -308,8 +275,6 @@ local function tryJumpObstacle(humanoid, root, character, direction)
 	end
 end
 
---// Boucle principale
-
 RunService.RenderStepped:Connect(function()
 	if not ScriptEnabled then
 		return
@@ -322,7 +287,7 @@ RunService.RenderStepped:Connect(function()
 		return
 	end
 
-	autoSelectControlMonster()
+	autoEquipFirstTool()
 
 	if now - lastTargetUpdate >= TargetUpdateRate then
 		lastTargetUpdate = now
