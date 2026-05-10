@@ -1,5 +1,5 @@
--- Version optimisée : lock caméra + garde distance + évite le vide
--- T = active / désactive le script
+-- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide
+-- T = activer / désactiver
 -- Quand OFF : contrôle rendu au joueur
 
 local Players = game:GetService("Players")
@@ -24,10 +24,7 @@ local DistanceTolerance = 4
 
 --// Optimisation
 
-local MovementUpdateRate = 0.02
 local TargetUpdateRate = 0.35
-
-local lastMovementUpdate = 0
 local lastTargetUpdate = 0
 local currentTargetPlayer = nil
 
@@ -35,17 +32,19 @@ local currentTargetPlayer = nil
 
 local MovePower = 1
 
---// Anti-vide léger
+--// Anti-vide
 
-local GroundCheckDistance = 9
-local GroundCheckDepth = 45
-local GroundCheckHeight = 6
-local SideCheckAngle = 45
-local StrongSideCheckAngle = 90
+local GroundCheckDistance = 10
+local GroundCheckDepth = 50
+local GroundCheckHeight = 7
+local EdgeSafetyRadius = 1.4
 
-local EdgeSafetyRadius = 1.3
+--// Directions alternatives
 
---// Mur / obstacle
+local SideCheckAngle = 35
+local StrongSideCheckAngle = 70
+
+--// Obstacle / mur
 
 local WallCheckDistance = 4
 local WallJumpCooldown = 0.35
@@ -71,7 +70,7 @@ local function getCharacter(player)
 	return character, humanoid, root
 end
 
-local function stopScriptMovement()
+local function stopMovement()
 	local character = LocalPlayer.Character
 	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
@@ -87,10 +86,10 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 
 	if input.KeyCode == Enum.KeyCode.T then
 		ScriptEnabled = not ScriptEnabled
-		stopScriptMovement()
 
 		if not ScriptEnabled then
 			currentTargetPlayer = nil
+			stopMovement()
 		end
 	end
 end)
@@ -102,16 +101,16 @@ local function getClosestPlayer()
 	local closestPlayer = nil
 	local closestDistance = MaxTargetDistance
 
-	for _, otherPlayer in ipairs(Players:GetPlayers()) do
-		if otherPlayer ~= LocalPlayer then
-			local _, _, otherRoot = getCharacter(otherPlayer)
+	for _, player in ipairs(Players:GetPlayers()) do
+		if player ~= LocalPlayer then
+			local _, _, otherRoot = getCharacter(player)
 
 			if otherRoot then
 				local distance = (otherRoot.Position - myRoot.Position).Magnitude
 
 				if distance < closestDistance then
 					closestDistance = distance
-					closestPlayer = otherPlayer
+					closestPlayer = player
 				end
 			end
 		end
@@ -154,10 +153,11 @@ local function rotateDirection(direction, degrees)
 	local cos = math.cos(radians)
 	local sin = math.sin(radians)
 
-	local x = direction.X * cos - direction.Z * sin
-	local z = direction.X * sin + direction.Z * cos
-
-	return Vector3.new(x, 0, z)
+	return Vector3.new(
+		direction.X * cos - direction.Z * sin,
+		0,
+		direction.X * sin + direction.Z * cos
+	)
 end
 
 local function chooseSafeDirection(root, character, wantedDirection)
@@ -179,8 +179,8 @@ local function chooseSafeDirection(root, character, wantedDirection)
 		rotateDirection(flatWanted, -SideCheckAngle),
 		rotateDirection(flatWanted, StrongSideCheckAngle),
 		rotateDirection(flatWanted, -StrongSideCheckAngle),
-		rotateDirection(flatWanted, 135),
-		rotateDirection(flatWanted, -135),
+		rotateDirection(flatWanted, 110),
+		rotateDirection(flatWanted, -110),
 	}
 
 	for _, direction in ipairs(directionsToTry) do
@@ -212,11 +212,7 @@ local function checkWallAhead(root, character, direction)
 
 	local result = Workspace:Raycast(origin, rayDirection, wallParams)
 
-	if result and result.Instance and result.Instance.CanCollide then
-		return true
-	end
-
-	return false
+	return result and result.Instance and result.Instance.CanCollide
 end
 
 local function tryJumpObstacle(humanoid, root, character, direction)
@@ -240,9 +236,11 @@ RunService.RenderStepped:Connect(function()
 	local now = os.clock()
 
 	local myCharacter, myHumanoid, myRoot = getCharacter(LocalPlayer)
-	if not myCharacter or not myHumanoid or not myRoot then return end
+	if not myCharacter or not myHumanoid or not myRoot then
+		return
+	end
 
-	-- Recherche de cible moins souvent pour éviter le lag
+	-- Recherche de cible allégée
 	if now - lastTargetUpdate >= TargetUpdateRate then
 		lastTargetUpdate = now
 		currentTargetPlayer = getClosestPlayer()
@@ -265,23 +263,20 @@ RunService.RenderStepped:Connect(function()
 
 	local targetPart = targetCharacter:FindFirstChild(AimPart)
 
-	-- Caméra toujours fluide
 	if targetPart then
 		Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPart.Position)
 	end
 
-	-- Déplacement moins souvent pour éviter les freeze
-	if now - lastMovementUpdate < MovementUpdateRate then
-		return
-	end
+	local myPosition = myRoot.Position
+	local targetPosition = targetRoot.Position
 
-	lastMovementUpdate = now
+	local flatTargetPosition = Vector3.new(
+		targetPosition.X,
+		myPosition.Y,
+		targetPosition.Z
+	)
 
-	local myPos = myRoot.Position
-	local targetPos = targetRoot.Position
-
-	local flatTargetPos = Vector3.new(targetPos.X, myPos.Y, targetPos.Z)
-	local directionToTarget = flatTargetPos - myPos
+	local directionToTarget = flatTargetPosition - myPosition
 	local distance = directionToTarget.Magnitude
 
 	if distance <= 0 then
