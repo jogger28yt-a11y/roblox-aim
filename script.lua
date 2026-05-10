@@ -1,4 +1,4 @@
--- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide + auto item hotbar
+-- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide + auto equip
 -- T = activer / désactiver
 -- Quand OFF : contrôle rendu au joueur
 
@@ -13,12 +13,6 @@ local Camera = Workspace.CurrentCamera
 --// Activation
 
 local ScriptEnabled = true
-
---// Auto prise en main item hotbar / backpack
-
-local AutoEquipFirstItem = true
-local AutoEquipCooldown = 0.3
-local lastAutoEquip = 0
 
 --// Réglages cible
 
@@ -56,6 +50,12 @@ local WallCheckDistance = 4
 local WallJumpCooldown = 0.35
 local lastWallJump = 0
 
+--// Auto sélection item hotbar / backpack
+
+local AutoEquipSlot1 = true
+local AutoEquipCooldown = 0.3
+local lastAutoEquip = 0
+
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
@@ -88,7 +88,7 @@ local function stopMovement()
 end
 
 local function autoEquipFirstTool()
-	if not AutoEquipFirstItem then
+	if not AutoEquipSlot1 then
 		return
 	end
 
@@ -113,17 +113,16 @@ local function autoEquipFirstTool()
 		return
 	end
 
-	-- Si un item est déjà équipé, on ne touche pas
 	local equippedTool = character:FindFirstChildOfClass("Tool")
+
 	if equippedTool then
 		return
 	end
 
-	-- Prend le premier Tool trouvé dans la hotbar/backpack
 	for _, item in ipairs(backpack:GetChildren()) do
 		if item:IsA("Tool") then
 			humanoid:EquipTool(item)
-			return
+			break
 		end
 	end
 end
@@ -289,6 +288,7 @@ RunService.RenderStepped:Connect(function()
 
 	autoEquipFirstTool()
 
+	-- Recherche de cible allégée
 	if now - lastTargetUpdate >= TargetUpdateRate then
 		lastTargetUpdate = now
 		currentTargetPlayer = getClosestPlayer()
