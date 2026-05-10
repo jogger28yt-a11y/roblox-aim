@@ -1,4 +1,4 @@
--- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide + auto equip
+-- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide + Super Speed Coil
 -- T = activer / désactiver
 -- Quand OFF : contrôle rendu au joueur
 
@@ -6,6 +6,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = Workspace.CurrentCamera
@@ -50,11 +51,19 @@ local WallCheckDistance = 4
 local WallJumpCooldown = 0.35
 local lastWallJump = 0
 
---// Auto sélection item hotbar / backpack
+--// Auto sélection Super Speed Coil
 
-local AutoEquipSlot1 = true
+local AutoEquipSuperSpeedCoilEnabled = true
 local AutoEquipCooldown = 0.3
 local lastAutoEquip = 0
+
+local WantedToolNames = {
+	"Super Speed Coil",
+	"Speed Coil",
+	"SuperSpeedCoil",
+	"super speed coil",
+	"speed coil",
+}
 
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -87,8 +96,42 @@ local function stopMovement()
 	Camera.CameraType = Enum.CameraType.Custom
 end
 
-local function autoEquipFirstTool()
-	if not AutoEquipSlot1 then
+local function isWantedTool(tool)
+	if not tool or not tool:IsA("Tool") then
+		return false
+	end
+
+	local toolName = string.lower(tool.Name)
+
+	for _, wantedName in ipairs(WantedToolNames) do
+		if toolName == string.lower(wantedName) then
+			return true
+		end
+	end
+
+	if string.find(toolName, "speed") and string.find(toolName, "coil") then
+		return true
+	end
+
+	return false
+end
+
+local function findWantedToolIn(container)
+	if not container then
+		return nil
+	end
+
+	for _, item in ipairs(container:GetDescendants()) do
+		if isWantedTool(item) then
+			return item
+		end
+	end
+
+	return nil
+end
+
+local function autoEquipSuperSpeedCoil()
+	if not AutoEquipSuperSpeedCoilEnabled then
 		return
 	end
 
@@ -115,15 +158,39 @@ local function autoEquipFirstTool()
 
 	local equippedTool = character:FindFirstChildOfClass("Tool")
 
-	if equippedTool then
+	if equippedTool and isWantedTool(equippedTool) then
 		return
 	end
 
-	for _, item in ipairs(backpack:GetChildren()) do
-		if item:IsA("Tool") then
-			humanoid:EquipTool(item)
-			break
-		end
+	local toolInBackpack = findWantedToolIn(backpack)
+
+	if toolInBackpack then
+		humanoid:EquipTool(toolInBackpack)
+		return
+	end
+
+	local toolInCharacter = findWantedToolIn(character)
+
+	if toolInCharacter then
+		return
+	end
+
+	local toolInReplicatedStorage = findWantedToolIn(ReplicatedStorage)
+
+	if toolInReplicatedStorage then
+		local clone = toolInReplicatedStorage:Clone()
+		clone.Parent = backpack
+		humanoid:EquipTool(clone)
+		return
+	end
+
+	local toolInWorkspace = findWantedToolIn(Workspace)
+
+	if toolInWorkspace then
+		local clone = toolInWorkspace:Clone()
+		clone.Parent = backpack
+		humanoid:EquipTool(clone)
+		return
 	end
 end
 
@@ -286,9 +353,8 @@ RunService.RenderStepped:Connect(function()
 		return
 	end
 
-	autoEquipFirstTool()
+	autoEquipSuperSpeedCoil()
 
-	-- Recherche de cible allégée
 	if now - lastTargetUpdate >= TargetUpdateRate then
 		lastTargetUpdate = now
 		currentTargetPlayer = getClosestPlayer()
