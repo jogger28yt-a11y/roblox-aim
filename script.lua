@@ -1,4 +1,4 @@
--- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide + auto equip
+-- Mode Destruction Makima : lock caméra + déplacement fluide + anti-vide + auto equip + fuite dégâts vers centre map
 -- T = activer / désactiver
 -- Quand OFF : contrôle rendu au joueur
 
@@ -56,11 +56,34 @@ local AutoEquipSlot1 = true
 local AutoEquipCooldown = 0.3
 local lastAutoEquip = 0
 
+--// Détection dégâts et fuite vers centre de map
+
+local DamageEscapeEnabled = true
+local DamageEscapeDuration = 4
+local DamageEscapeDistance = 12
+
+local lastHealth = nil
+local lastDamageTime = -math.huge
+
+--// Centre automatique de toute la map
+
+local AutoMapCenterEnabled = true
+local MapCenterScanCooldown = 3
+local lastMapCenterScan = 0
+local currentMapCenter = nil
+
+local MinGroundSize = 12
+local MaxGroundHeight = 12
+
+--// Raycasts
+
 local rayParams = RaycastParams.new()
 rayParams.FilterType = Enum.RaycastFilterType.Exclude
 
 local wallParams = RaycastParams.new()
 wallParams.FilterType = Enum.RaycastFilterType.Exclude
+
+--// Fonctions personnage
 
 local function getCharacter(player)
 	local character = player.Character
@@ -86,6 +109,8 @@ local function stopMovement()
 
 	Camera.CameraType = Enum.CameraType.Custom
 end
+
+--// Auto equip premier item
 
 local function autoEquipFirstTool()
 	if not AutoEquipSlot1 then
@@ -127,6 +152,8 @@ local function autoEquipFirstTool()
 	end
 end
 
+--// T pour ON / OFF
+
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 
@@ -139,6 +166,8 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		end
 	end
 end)
+
+--// Cible proche
 
 local function getClosestPlayer()
 	local _, _, myRoot = getCharacter(LocalPlayer)
@@ -164,6 +193,8 @@ local function getClosestPlayer()
 
 	return closestPlayer
 end
+
+--// Sol / anti-vide
 
 local function hasGround(position, character)
 	rayParams.FilterDescendantsInstances = { character }
@@ -240,6 +271,8 @@ local function chooseSafeDirection(root, character, wantedDirection)
 	return Vector3.zero
 end
 
+--// Mur / obstacle
+
 local function checkWallAhead(root, character, direction)
 	if direction.Magnitude <= 0 then
 		return false
@@ -274,6 +307,126 @@ local function tryJumpObstacle(humanoid, root, character, direction)
 	end
 end
 
+--// Détection dégâts
+
+local function updateDamageState(humanoid)
+	if not DamageEscapeEnabled then
+		return
+	end
+
+	if lastHealth == nil then
+		lastHealth = humanoid.Health
+		return
+	end
+
+	if humanoid.Health < lastHealth then
+		lastDamageTime = os.clock()
+	end
+
+	lastHealth = humanoid.Health
+end
+
+local function isEscapingDamage()
+	if not DamageEscapeEnabled then
+		return false
+	end
+
+	return os.clock() - lastDamageTime <= DamageEscapeDuration
+end
+
+--// Centre global de la map
+
+local function isMapGroundPart(part)
+	if not part:IsA("BasePart") then
+		return false
+	end
+
+	if not part.CanCollide then
+		return false
+	end
+
+	if part.Transparency >= 1 then
+		return false
+	end
+
+	if part.Size.Magnitude < MinGroundSize then
+		return false
+	end
+
+	local horizontalSize = math.max(part.Size.X, part.Size.Z)
+
+	if horizontalSize < MinGroundSize then
+		return false
+	end
+
+	-- Ignore les murs très verticaux
+	if part.Size.Y > MaxGroundHeight and part.Size.Y > part.Size.X and part.Size.Y > part.Size.Z then
+		return false
+	end
+
+	-- Ignore les personnages
+	local model = part:FindFirstAncestorOfClass("Model")
+	if model and model:FindFirstChildOfClass("Humanoid") then
+		return false
+	end
+
+	return true
+end
+
+local function updateGlobalMapCenter()
+	if not AutoMapCenterEnabled then
+		return
+	end
+
+	local now = os.clock()
+
+	if now - lastMapCenterScan < MapCenterScanCooldown then
+		return
+	end
+
+	lastMapCenterScan = now
+
+	local totalWeight = 0
+	local weightedPosition = Vector3.zero
+
+	for _, object in ipairs(Workspace:GetDescendants()) do
+		if isMapGroundPart(object) then
+			local area = object.Size.X * object.Size.Z
+
+			weightedPosition += object.Position * area
+			totalWeight += area
+		end
+	end
+
+	if totalWeight > 0 then
+		currentMapCenter = weightedPosition / totalWeight
+	end
+end
+
+local function getDirectionToGlobalMapCenter(root)
+	if not currentMapCenter then
+		return Vector3.zero
+	end
+
+	local rootPosition = root.Position
+
+	local flatCenter = Vector3.new(
+		currentMapCenter.X,
+		rootPosition.Y,
+		currentMapCenter.Z
+	)
+
+	local direction = flatCenter - rootPosition
+
+	if direction.Magnitude <= DamageEscapeDistance then
+		return Vector3.zero
+	end
+
+	return direction.Unit
+end
+
+--// Boucle principale
+
 RunService.RenderStepped:Connect(function()
 	if not ScriptEnabled then
 		return
@@ -286,6 +439,8 @@ RunService.RenderStepped:Connect(function()
 		return
 	end
 
+	updateDamageState(myHumanoid)
+	updateGlobalMapCenter()
 	autoEquipFirstTool()
 
 	-- Recherche de cible allégée
@@ -296,53 +451,70 @@ RunService.RenderStepped:Connect(function()
 
 	local targetPlayer = currentTargetPlayer
 
-	if not targetPlayer then
-		myHumanoid:Move(Vector3.zero, false)
-		return
-	end
+	-- Caméra lock si cible existante
+	if targetPlayer then
+		local targetCharacter, _, targetRoot = getCharacter(targetPlayer)
 
-	local targetCharacter, _, targetRoot = getCharacter(targetPlayer)
+		if targetCharacter and targetRoot then
+			local targetPart = targetCharacter:FindFirstChild(AimPart)
 
-	if not targetCharacter or not targetRoot then
-		currentTargetPlayer = nil
-		myHumanoid:Move(Vector3.zero, false)
-		return
-	end
-
-	local targetPart = targetCharacter:FindFirstChild(AimPart)
-
-	if targetPart then
-		Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPart.Position)
-	end
-
-	local myPosition = myRoot.Position
-	local targetPosition = targetRoot.Position
-
-	local flatTargetPosition = Vector3.new(
-		targetPosition.X,
-		myPosition.Y,
-		targetPosition.Z
-	)
-
-	local directionToTarget = flatTargetPosition - myPosition
-	local distance = directionToTarget.Magnitude
-
-	if distance <= 0 then
-		myHumanoid:Move(Vector3.zero, false)
-		return
+			if targetPart then
+				Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPart.Position)
+			end
+		else
+			currentTargetPlayer = nil
+		end
 	end
 
 	local wantedDirection = Vector3.zero
 
-	if distance > DesiredDistance + DistanceTolerance then
-		wantedDirection = directionToTarget.Unit
+	-- PRIORITÉ 1 : si le joueur prend des dégâts, il va vers le centre global de la map
+	if isEscapingDamage() then
+		wantedDirection = getDirectionToGlobalMapCenter(myRoot)
+	end
 
-	elseif distance < DesiredDistance - DistanceTolerance then
-		wantedDirection = -directionToTarget.Unit
+	-- PRIORITÉ 2 : sinon il garde la distance avec la cible
+	if wantedDirection.Magnitude <= 0 then
+		if not targetPlayer then
+			myHumanoid:Move(Vector3.zero, false)
+			return
+		end
 
-	else
-		myHumanoid:Move(Vector3.zero, false)
-		return
+		local targetCharacter, _, targetRoot = getCharacter(targetPlayer)
+
+		if not targetCharacter or not targetRoot then
+			currentTargetPlayer = nil
+			myHumanoid:Move(Vector3.zero, false)
+			return
+		end
+
+		local myPosition = myRoot.Position
+		local targetPosition = targetRoot.Position
+
+		local flatTargetPosition = Vector3.new(
+			targetPosition.X,
+			myPosition.Y,
+			targetPosition.Z
+		)
+
+		local directionToTarget = flatTargetPosition - myPosition
+		local distance = directionToTarget.Magnitude
+
+		if distance <= 0 then
+			myHumanoid:Move(Vector3.zero, false)
+			return
+		end
+
+		if distance > DesiredDistance + DistanceTolerance then
+			wantedDirection = directionToTarget.Unit
+
+		elseif distance < DesiredDistance - DistanceTolerance then
+			wantedDirection = -directionToTarget.Unit
+
+		else
+			myHumanoid:Move(Vector3.zero, false)
+			return
+		end
 	end
 
 	local safeDirection = chooseSafeDirection(myRoot, myCharacter, wantedDirection)
